@@ -1,0 +1,9 @@
+benchmark/results*
+benchmark/*.zip
+benchmark/logs
+*.pdf
+benchmark/test
+benchmark/*.txt
+*.txt
+target
+benchmark/.*

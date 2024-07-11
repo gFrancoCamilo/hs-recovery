@@ -1,0 +1,27 @@
+{
+    "testbed": "hotstuff",
+    "key": {
+        "name": "tundra",
+        "path": "/home/gfrancoc/.ssh/aws"
+    },
+    "ports": {
+        "consensus": 11000,
+        "mempool": 7000,
+        "front": 6000
+    },
+    "repo": {
+        "name": "hotstuff-test",
+        "url": "https://github.com/gFrancoCamilo/hotstuff-oneclique.git",
+        "branch": "main"
+    },
+    "instances": {
+        "type": "m5d.xlarge",
+        "regions": [
+            "us-east-1",
+            "eu-north-1",
+            "us-west-1",
+	    "ap-southeast-2",
+            "ap-northeast-1"
+        ]
+    }
+}
