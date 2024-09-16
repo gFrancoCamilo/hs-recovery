@@ -20,19 +20,19 @@ class CommandMaker:
         return 'cargo build --quiet --release --features benchmark'
 
     @staticmethod
-    def generate_key(filename):
+    def generate_key(filename, i):
         assert isinstance(filename, str)
-        return f'./node keys --filename {filename}'
+        return f'./node keys --filename {filename} {i}'
 
     @staticmethod
-    def run_node(keys, committee, store, parameters, debug=False):
+    def run_node(keys, committee, store, parameters, id, debug=True):
         assert isinstance(keys, str)
         assert isinstance(committee, str)
         assert isinstance(parameters, str)
         assert isinstance(debug, bool)
         v = '-vvv' if debug else '-vv'
         return (f'./node {v} run --keys {keys} --committee {committee} '
-                f'--store {store} --parameters {parameters}')
+                f'--store {store} --parameters {parameters} {id}')
 
     @staticmethod
     def run_client(address, size, rate, timeout, nodes=[]):

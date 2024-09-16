@@ -29,14 +29,14 @@ pub struct NewHelper {
 }
 
 impl NewHelper {
-    pub fn spawn(name: PublicKey, committee: Committee, store: Store, rx_requests: Receiver<(Digest, u64, PublicKey)>, firewall: HashMap<u64,Vec<SocketAddr>>, allow_communications_at_round: u64, network_delay: u64) {
+    pub fn spawn(name: PublicKey, committee: Committee, store: Store, rx_requests: Receiver<(Digest, u64, PublicKey)>, firewall: HashMap<u64,Vec<SocketAddr>>, allow_communications_at_round: u64, network_delay: u64, dns: HashMap<SocketAddr, SocketAddr>) {
         tokio::spawn(async move {
             Self {
                 name,
                 committee,
                 store,
                 rx_requests,
-                network: ReliableSender::new(firewall, allow_communications_at_round, network_delay),
+                network: ReliableSender::new(firewall, allow_communications_at_round, network_delay, dns),
             }
             .run()
             .await;

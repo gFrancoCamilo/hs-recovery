@@ -14,10 +14,9 @@ class PlotError(Exception):
 
 
 class Ploter:
-    def __init__(self, filenames=['./bench-0-15-10000-512.txt']):
-        filenames = ['./bench-0-15-10000-512.txt']
+    def __init__(self, filenames):
+        print(filenames)
         if not filenames:
-            print(filenames)
             raise PlotError('No data to plot')
 
         self.results = []
@@ -34,6 +33,11 @@ class Ploter:
 
     def _tps(self, data):
         values = findall(r' TPS: (\d+) \+/- (\d+)', data)
+        values = [(int(x), int(y)) for x, y in values]
+        return list(zip(*values))
+
+    def _tx(self, data):
+        values = int(search(r'Transaction size: (\d+)', data).group(1))
         values = [(int(x), int(y)) for x, y in values]
         return list(zip(*values))
 
@@ -60,19 +64,22 @@ class Ploter:
         markers = cycle(['o', 'v', 's', 'p', 'D', 'P'])
         self.results.sort(key=self._natural_keys, reverse=(type == 'tps'))
         for result in self.results:
-            print(self.results)
             y_values, y_err = y_axis(result)
             x_values = self._variable(result)
             if len(y_values) != len(y_err) or len(y_err) != len(x_values):
                 raise PlotError('Unequal number of x, y, and y_err values')
 
-            plt.errorbar(
-                x_values, y_values, yerr=y_err, label=z_axis(result),
-                linestyle='dotted', marker=next(markers), capsize=3
+           # plt.errorbar(
+           #     x_values, y_values, yerr=y_err, label=z_axis(result),
+           #     linestyle='dotted', marker=next(markers), capsize=3
+           # )
+            plt.plot(
+                x_values, y_values, label=z_axis(result),
+                linestyle='dotted', marker=next(markers)
             )
 
         plt.legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=2)
-        plt.xlim(xmin=0)
+        plt.xlim(xmin=50000)
         plt.ylim(bottom=0)
         plt.xlabel(x_label)
         plt.ylabel(y_label[0])
@@ -94,7 +101,8 @@ class Ploter:
     def nodes(data):
         x = search(r'Committee size: (\d+)', data).group(1)
         f = search(r'Faults: (\d+)', data).group(1)
-        faults = f'({f} faulty)' if f != '0' else ''
+        #faults = f'({f} faulty)' if f != '0' else ''
+        faults = f'(Recover-HS)' if f == '1' else f'(HS)'
         return f'{x} nodes {faults}'
 
     @staticmethod
@@ -102,6 +110,7 @@ class Ploter:
         x = search(r'Max latency: (\d+)', data).group(1)
         f = search(r'Faults: (\d+)', data).group(1)
         faults = f'({f} faulty)' if f != '0' else ''
+        #faults = f'(our)' if f != '0' else ''
         return f'Max latency: {float(x) / 1000:,.1f} s {faults}'
 
     @classmethod
@@ -135,6 +144,16 @@ class Ploter:
         ploter._plot(x_label, y_label, ploter._tps, z_axis, 'tps')
 
     @classmethod
+    def plot_tx(cls, files):
+        assert isinstance(files, list)
+        assert all(isinstance(x, str) for x in files)
+        z_axis = cls.max_latency
+        x_label = 'Tx Size (B)'
+        y_label = ['Latency (ms)']
+        ploter = cls(files)
+        ploter._plot(x_label, y_label, ploter._tx, z_axis, 'tx')
+
+    @classmethod
     def plot(cls, params_dict):
         try:
             params = PlotParameters(params_dict)
@@ -148,20 +167,37 @@ class Ploter:
         robustness_files, latency_files, tps_files = [], [], []
         tx_size = params.tx_size
         
-        for f in params.faults:
-            for n in params.nodes:
-                robustness_files += glob(
-                    PathMaker.agg_file('robustness', f, n, 'x', tx_size, 'any')
-                )
-                latency_files += glob(
-                    PathMaker.agg_file('latency', f, n, 'any', tx_size, 'any')
-                )
-            for l in params.max_latency:
-                tps_files += glob(
-                    PathMaker.agg_file('tps', f, 'x', 'any', tx_size, l)
-                )
+        if isinstance(tx_size, int):
+            for f in params.faults:
+                for n in params.nodes:
+                    robustness_files += glob(
+                        PathMaker.agg_file('robustness', f, n, 'x', tx_size, 'any')
+                    )
+                    latency_files += glob(
+                        PathMaker.agg_file('latency', f, n, 'any', tx_size, 'any')
+                    )
+                for l in params.max_latency:
+                    tps_files += glob(
+                        PathMaker.agg_file('tps', f, 'x', 'any', tx_size, l)
+                    )
 
-        # Make the plots.
-        cls.plot_robustness(robustness_files)
-        cls.plot_latency(latency_files)
-        cls.plot_tps(tps_files)
+            # Make the plots.
+            cls.plot_robustness(robustness_files)
+            cls.plot_latency(latency_files)
+            cls.plot_tps(tps_files)
+        else:
+            tx_size_files = []
+            for f in params.faults:
+                for n in params.nodes:
+                    for size in tx_size:
+                        robustness_files += glob(
+                            PathMaker.agg_file('robustness', f, n, 'x', size, 'any')
+                        )
+                        latency_files += glob(
+                            PathMaker.agg_file('latency', f, n, 'any', size, 'any')
+                        )
+                        #    tx_size_files += glob(
+                        #        PathMaker.result_file(f, n, 50000, size)
+                        #    )
+            print(robustness_files)
+            cls.plot_tx(robustness_files)

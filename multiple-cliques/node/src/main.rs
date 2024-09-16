@@ -31,6 +31,7 @@ enum Command {
         /// The file where to print the new key pair.
         #[clap(short, long, value_parser, value_name = "FILE")]
         filename: String,
+        id: String,
     },
     /// Run a single node.
     Run {
@@ -46,6 +47,7 @@ enum Command {
         /// The path where to create the data store.
         #[clap(short, long, value_parser, value_name = "PATH")]
         store: String,
+        id: u64,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -72,8 +74,8 @@ async fn main() {
     logger.init();
 
     match cli.command {
-        Command::Keys { filename } => {
-            if let Err(e) = Node::print_key_file(&filename) {
+        Command::Keys { filename, id } => {
+            if let Err(e) = Node::print_key_file(&filename, id.parse::<u64>().unwrap()) {
                 error!("{}", e);
             }
         }
@@ -82,7 +84,8 @@ async fn main() {
             committee,
             parameters,
             store,
-        } => match Node::new(&committee, &keys, &store, parameters).await {
+            id,
+        } => match Node::new(&committee, &keys, &store, parameters, id).await {
             Ok(mut node) => {
                 tokio::spawn(async move {
                     node.analyze_block().await;
@@ -102,7 +105,7 @@ async fn main() {
 }
 
 fn deploy_testbed(nodes: u16, committee_file: &str) -> Result<Vec<JoinHandle<()>>, Box<dyn std::error::Error>> {
-    let keys: Vec<_> = (0..nodes).map(|_| Secret::new()).collect();
+    let keys: Vec<_> = (0..nodes).map(|i| Secret::new(i as u64)).collect();
 
     let committee = Committee::read(committee_file)?;
 
@@ -158,7 +161,7 @@ fn deploy_testbed(nodes: u16, committee_file: &str) -> Result<Vec<JoinHandle<()>
             let _ = fs::remove_dir_all(&store_path);
 
             Ok(tokio::spawn(async move {
-                match Node::new(committee_file, &key_file, &store_path, None).await {
+                match Node::new(committee_file, &key_file, &store_path, None, i as u64).await {
                     Ok(mut node) => {
                         // Sink the commit channel.
                         while node.commit.recv().await.is_some() {}

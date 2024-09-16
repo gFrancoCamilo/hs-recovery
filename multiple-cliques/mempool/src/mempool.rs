@@ -68,6 +68,7 @@ impl Mempool {
         firewall: HashMap<u64, Vec<SocketAddr>>,
         allow_communications_at_round: u64,
         network_delay: u64,
+        dns: HashMap<SocketAddr, SocketAddr>,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
@@ -83,7 +84,7 @@ impl Mempool {
 
         // Spawn all mempool tasks.
         mempool.handle_consensus_messages(rx_consensus, network_delay);
-        mempool.handle_clients_transactions(firewall, allow_communications_at_round, network_delay);
+        mempool.handle_clients_transactions(firewall, allow_communications_at_round, network_delay, dns);
         mempool.handle_mempool_messages(network_delay);
 
         info!(
@@ -113,7 +114,7 @@ impl Mempool {
     }
 
     /// Spawn all tasks responsible to handle clients transactions.
-    fn handle_clients_transactions(&self, firewall: HashMap<u64,Vec<SocketAddr>>, allow_communications: u64, network_delay: u64) {
+    fn handle_clients_transactions(&self, firewall: HashMap<u64,Vec<SocketAddr>>, allow_communications: u64, network_delay: u64, dns: HashMap<SocketAddr, SocketAddr>) {
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);
         let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);
@@ -143,6 +144,7 @@ impl Mempool {
             //new_firewall,
             allow_communications,
             network_delay,
+            dns,
         );
 
         // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards

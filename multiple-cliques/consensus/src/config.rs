@@ -20,6 +20,7 @@ pub struct NetworkParameters {
     //pub new_firewall: Vec<String>,
     pub allow_communications_at_round: u64,
     pub network_delay: u64,
+    pub dns: HashMap<u64, String>,
 }
 
 impl Default for NetworkParameters {
@@ -29,6 +30,7 @@ impl Default for NetworkParameters {
             //new_firewall: Vec::new(),
             allow_communications_at_round: 20000,
             network_delay: 10,
+            dns: HashMap::new(),
         }
     }
 }
@@ -113,11 +115,11 @@ impl Committee {
         //2 * (total_votes) / 3 + 1
     }
     //
-    //pub fn quorum_threshold(&self, firewall: Vec<SocketAddr>) -> u32 {
-    //    let size = self.size_by_firewall(firewall.clone());
-    //    info!("Quorum threshold is {}", (2*(size as u32)/3 + 1));
-    //    2 * (size as u32)/3 + 1
-    //}
+    pub fn quorum_threshold_firewall(&self, firewall: Vec<SocketAddr>) -> u32 {
+        let size = self.size_by_firewall(firewall.clone());
+        info!("Quorum threshold by firewall is {}", (2*(size as u32)/3 + 1));
+        2 * (size as u32)/3 + 1
+    }
 
     pub fn address(&self, name: &PublicKey) -> Option<SocketAddr> {
         self.authorities.get(name).map(|x| x.address)

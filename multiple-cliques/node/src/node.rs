@@ -22,6 +22,7 @@ impl Node {
         key_file: &str,
         store_path: &str,
         parameters: Option<String>,
+        id: u64,
     ) -> Result<Self, ConfigError> {
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_to_mempool, rx_consensus_to_mempool) = channel(CHANNEL_CAPACITY);
@@ -33,7 +34,7 @@ impl Node {
         let name = secret.name;
         let secret_key = secret.secret;
         
-        
+        info!("Node id is {}", id); 
 
         // Load default parameters if none are specified.
         let parameters = match parameters {
@@ -44,14 +45,15 @@ impl Node {
         let mut firewall: HashMap<u64,Vec<SocketAddr>> = HashMap::new();
 
         // Maps ID to fake address
-        //let mut nat: HashMap<u64, SocketAddr> = HashMap::new();
-        //let number_nodes = self.committee.authorities.len();
+        let mut dns: HashMap<SocketAddr, SocketAddr> = HashMap::new();
+        let number_nodes = committee.consensus.authorities.len();
 
-        /*for n in 0..number_nodes {
-            let address = format!("127.0.0.1:100{}", n);
-            nat.entry(n).or_insert(address.parse().expect("Unable to parse socket address"));
+        for n in 0..number_nodes {
+            let address = format!("127.0.0.1:{}", n+10000);
+            dns.entry(parameters.network.dns[&(n as u64)].parse().expect("Unable to parse socket address")).or_insert(address.parse().expect("Unable to parse socket address"));
         }
-        debug!("NAT here is {}", nat);*/
+        info!("DNS here is {:?}", dns);
+        info!("DNS from parameters here is {:?}", parameters.network.dns);
         
         //TODO: change below to remove for
         for (key, value) in parameters.network.firewall.clone().into_iter() {
@@ -78,6 +80,7 @@ impl Node {
             firewall.clone(),
             parameters.network.allow_communications_at_round,
             parameters.network.network_delay,
+            dns.clone(),
         );
 
         // Run the consensus core.
@@ -93,14 +96,16 @@ impl Node {
             firewall,
             parameters.network.allow_communications_at_round,
             parameters.network.network_delay,
+            dns,
+            id,
         );
 
         info!("Node {} successfully booted", name);
         Ok(Self { commit: rx_commit })
     }
 
-    pub fn print_key_file(filename: &str) -> Result<(), ConfigError> {
-        Secret::new().write(filename)
+    pub fn print_key_file(filename: &str, id: u64) -> Result<(), ConfigError> {
+        Secret::new(id).write(filename)
     }
 
     pub async fn analyze_block(&mut self) {

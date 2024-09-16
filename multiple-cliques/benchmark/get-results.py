@@ -36,6 +36,13 @@ class Scenario:
         for i, clique in enumerate(cliques):
             clique.append(honest_parties[i])
         return cliques
+    def _create_dns_file (self):
+        dns = {}
+        for i in range(self._get_total_number_nodes()):
+            dns[i] = "127.0.0.1:" + str(BASE_PORT + i)
+        with open("./benchmark/.dns.json","w") as f:
+            json.dump(dns, f, indent=4, sort_keys=True)
+
     
     def _print(self):
         print('------------------------------------------------')
@@ -99,3 +106,4 @@ class Scenario:
 scenario = Scenario(2)
 scenario._print()
 scenario._create_network_params_file()
+scenario._create_dns_file()

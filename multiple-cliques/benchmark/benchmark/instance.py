@@ -133,6 +133,7 @@ class InstanceManager:
             Filters=[{
                 'Name': 'description',
                 #'Values': ['Canonical, Ubuntu, 20.04 LTS, amd64 focal image build on 2020-10-26']
+                #'Values': ['Canonical, Ubuntu, 24.04 LTS, amd64 noble image build on 2024-04-23']
                 'Values': ['Canonical, Ubuntu, 22.04 LTS, amd64 jammy image build on 2024-07-01']
             }]
         )

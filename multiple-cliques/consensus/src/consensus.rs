@@ -60,7 +60,7 @@ pub enum ConsensusMessage {
     NewSyncRequest(Digest, u64, PublicKey),
     Blocks(Blocks),
     FirstBlocks(Blocks, Vec<SocketAddr>),
-    ShiftedChain(PublicKey, Vec<SocketAddr>),
+    ShiftedChain(PublicKey, Vec<SocketAddr>, u64),
 }
 
 pub struct Consensus;
@@ -80,6 +80,8 @@ impl Consensus {
         firewall: HashMap<u64, Vec<SocketAddr>>,
         allow_communications_at_round: u64,
         network_delay: u64,
+        dns: HashMap<SocketAddr, SocketAddr>,
+        id: u64,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
@@ -146,6 +148,8 @@ impl Consensus {
             //new_firewall.clone(),
             allow_communications_at_round,
             network_delay,
+            dns.clone(),
+            id,
         );
 
         // Spawn the block proposer.
@@ -160,6 +164,7 @@ impl Consensus {
             //new_firewall.clone(),
             allow_communications_at_round,
             network_delay,
+            dns.clone(),
         );
 
         // Spawn the helper module.

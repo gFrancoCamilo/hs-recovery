@@ -56,7 +56,7 @@ impl Block {
         &self.qc.hash
     }
 
-    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, firewall: Vec<SocketAddr>) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         let voting_rights = committee.stake(&self.author);
         ensure!(
@@ -69,12 +69,12 @@ impl Block {
 
         // Check the embedded QC.
         if self.qc != QC::genesis() {
-            self.qc.verify(committee)?;
+            self.qc.verify(committee, firewall.clone())?;
         }
 
         // Check the TC embedded in the block (if any).
         if let Some(ref tc) = self.tc {
-            tc.verify(committee)?;
+            tc.verify(committee, firewall.clone())?;
         }
         Ok(())
     }
@@ -231,7 +231,7 @@ impl QC {
         self.hash == Digest::default() && self.round != 0
     }
 
-    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, firewall: Vec<SocketAddr>) -> ConsensusResult<()> {
         // Ensure the QC has a quorum.
         let mut weight = 0;
         let mut used = HashSet::new();
@@ -243,7 +243,7 @@ impl QC {
             weight += voting_rights;
         }
         ensure!(
-            weight >= committee.quorum_threshold(),
+            weight >= committee.quorum_threshold_firewall(firewall.clone()),
             ConsensusError::QCRequiresQuorum
         );
 
@@ -301,7 +301,7 @@ impl Timeout {
         }
     }
 
-    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, firewall: Vec<SocketAddr>) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         ensure!(
             committee.stake(&self.author) > 0,
@@ -313,7 +313,7 @@ impl Timeout {
 
         // Check the embedded QC.
         if self.high_qc != QC::genesis() {
-            self.high_qc.verify(committee)?;
+            self.high_qc.verify(committee, firewall.clone())?;
         }
         Ok(())
     }
@@ -341,7 +341,7 @@ pub struct TC {
 }
 
 impl TC {
-    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, firewall: Vec<SocketAddr>) -> ConsensusResult<()> {
         // Ensure the QC has a quorum.
         let mut weight = 0;
         let mut used = HashSet::new();
@@ -353,7 +353,7 @@ impl TC {
             weight += voting_rights;
         }
         ensure!(
-            weight >= committee.quorum_threshold(),
+            weight >= committee.quorum_threshold_firewall(firewall.clone()),
             ConsensusError::TCRequiresQuorum
         );
 

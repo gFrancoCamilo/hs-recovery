@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+#![allow(warnings)]
 use crate::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;

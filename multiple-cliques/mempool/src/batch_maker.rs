@@ -54,6 +54,7 @@ impl BatchMaker {
         //new_firewall: Vec<SocketAddr>,
         allow_communications_at_round: u64,
         network_delay: u64,
+        dns: HashMap<SocketAddr, SocketAddr>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -64,7 +65,7 @@ impl BatchMaker {
                 mempool_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                network: ReliableSender::new(firewall, allow_communications_at_round, network_delay),
+                network: ReliableSender::new(firewall, allow_communications_at_round, network_delay, dns),
             }
             .run()
             .await;

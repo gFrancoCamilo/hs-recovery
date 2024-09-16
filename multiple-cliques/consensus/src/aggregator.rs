@@ -75,8 +75,8 @@ impl QCMaker {
     pub fn append(&mut self, vote: Vote, committee: &Committee, threshold: u32) -> ConsensusResult<Option<QC>> {
         let author = vote.author;
         
-        //debug!("Inside QCMaker. Threshold is {:?}", committee.quorum_threshold());
-        //debug!("Inside QCMaker. Votes is {:?}, used is {:?}", self.votes.clone(), self.used.clone());
+        debug!("Inside QCMaker. Threshold is {:?}", threshold);
+        debug!("Inside QCMaker. Votes is {:?}, used is {:?}", self.votes.clone(), self.used.clone());
 
         // Ensure it is the first time this authority votes.
         ensure!(
@@ -122,8 +122,8 @@ impl TCMaker {
     ) -> ConsensusResult<Option<TC>> {
         let author = timeout.author;
 
-        //debug!("Inside TCMaker. Threshold is {:?}", committee.quorum_threshold());
-        //debug!("Inside TCMaker. Votes is {:?}, used is {:?}", self.votes.clone(), self.used.clone());
+        debug!("Inside TCMaker. Threshold is {:?}", threshold);
+        debug!("Inside TCMaker. Votes is {:?}, used is {:?}", self.votes.clone(), self.used.clone());
         // Ensure it is the first time this authority votes.
         ensure!(
             self.used.insert(author),

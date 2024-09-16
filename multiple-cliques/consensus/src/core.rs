@@ -56,6 +56,8 @@ pub struct Core {
     aggregator: Aggregator,
     network: DelayedSender,
     alt_tips: Vec<Digest>,
+    dns: HashMap<SocketAddr, SocketAddr>,
+    id: u64,
     //identified_faults: Vec<SocketAddr>,
     //announced_faults: Vec<SocketAddr>,
     //network_delay: u64,
@@ -80,6 +82,8 @@ impl Core {
         //new_firewall: Vec<SocketAddr>,
         allow_communications_at_round: u64,
         network_delay: u64,
+        dns: HashMap<SocketAddr, SocketAddr>,
+        id: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -100,8 +104,10 @@ impl Core {
                 high_qc: QC::genesis(),
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
-                network: DelayedSender::new(firewall, allow_communications_at_round, network_delay),
+                network: DelayedSender::new(firewall, allow_communications_at_round, network_delay, dns.clone()),
                 alt_tips: Vec::new(),
+                dns: dns.clone(),
+                id,
                 //network_delay,
                 //identified_faults: Vec::new(),
                 //announced_faults: Vec::new(),
@@ -130,7 +136,7 @@ impl Core {
 
     async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
         // Check if we can vote for this block.
-        let safety_rule_1 = block.round > self.last_voted_round;
+        let mut safety_rule_1 = block.round > self.last_voted_round;
         let mut safety_rule_2 = block.qc.round + 1 == block.round;
         //debug!("Inside make vote: Block qc round {:?} and block round {:?}", block.qc.round.clone(), block.round.clone());
         if let Some(ref tc) = block.tc {
@@ -140,9 +146,10 @@ impl Core {
             //debug!("Inside make vote: Block qc round {:?} iter qc rounds {:?}", block.qc.round.clone(), *tc.high_qc_rounds().iter().max().expect("Empty TC"));
             safety_rule_2 |= can_extend;
         }
-        safety_rule_2 = true;
+        //safety_rule_2 = true;
+        //safety_rule_1 = true;
         if !(safety_rule_1 && safety_rule_2) {
-            //debug!("Safety did not pass: Safety 1 is {:?} and safety 2 is {:?}", safety_rule_1.clone(), safety_rule_2.clone());
+            debug!("Safety did not pass: Safety 1 is {:?} and safety 2 is {:?}", safety_rule_1.clone(), safety_rule_2.clone());
             return None;
         }
 
@@ -208,7 +215,7 @@ impl Core {
         if qc.round > self.high_qc.round {
             self.high_qc = qc.clone();
         }
-        //info!("Inside updating high qc. Value is now {:?}", self.high_qc.clone());
+        info!("Inside updating high qc. Value is now {:?}", self.high_qc.clone());
     }
 
     async fn local_timeout_round(&mut self) -> ConsensusResult<()> {
@@ -250,9 +257,10 @@ impl Core {
 
     #[async_recursion]
     async fn handle_vote(&mut self, vote: &Vote) -> ConsensusResult<()> {
-        let author_address = self.committee.address(&vote.author).unwrap();
+        let mut author_address = self.committee.address(&vote.author).unwrap();
         let firewall_count = self.round/self.network.allow_communications_at_round;
 
+        author_address = self.dns[&author_address]; 
         if author_address.to_string().find(':').map(|i| author_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1)
             && self.network.firewall.get(&(firewall_count)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
         {
@@ -273,14 +281,14 @@ impl Core {
         vote.verify(&self.committee)?;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(qc) = self.aggregator.add_vote(vote.clone(), self.committee.quorum_threshold())? {
+        if let Some(qc) = self.aggregator.add_vote(vote.clone(), self.committee.quorum_threshold_firewall(self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()))? {
             debug!("Assembled {:?}", qc);
 
             // Process the QC.
             self.process_qc(&qc).await;
 
             // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()) {
+            if self.name == self.leader_elector.get_leader(self.round, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone(), self.dns.clone()) {
                 self.generate_proposal(None).await;
             }
         }
@@ -289,9 +297,10 @@ impl Core {
 
     async fn handle_timeout(&mut self, timeout: &Timeout) -> ConsensusResult<()> {
         debug!("Processing {:?}", timeout);
-        let author_address = self.committee.address(&timeout.author).unwrap();
+        let mut author_address = self.committee.address(&timeout.author).unwrap();
         let firewall_count = self.round/self.network.allow_communications_at_round;
 
+        author_address = self.dns[&author_address]; 
         if author_address.to_string().find(':').map(|i| author_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1)
             && self.network.firewall.get(&(firewall_count)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
         {
@@ -308,13 +317,14 @@ impl Core {
         }
 
         // Ensure the timeout is well formed.
-        timeout.verify(&self.committee)?;
+        timeout.verify(&self.committee, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone())?;
 
+        debug!("Processing {:?}", timeout);
         // Process the QC embedded in the timeout.
         self.process_qc(&timeout.high_qc).await;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(tc) = self.aggregator.add_timeout(timeout.clone(), self.committee.quorum_threshold())? {
+        if let Some(tc) = self.aggregator.add_timeout(timeout.clone(), self.committee.quorum_threshold_firewall(self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()))? {
             debug!("Assembled {:?}", tc);
 
             // Try to advance the round.
@@ -335,7 +345,7 @@ impl Core {
                 .await;
 
             // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()) {
+            if self.name == self.leader_elector.get_leader(self.round, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone(), self.dns.clone()) {
                 self.generate_proposal(Some(tc)).await;
             }
         }
@@ -408,8 +418,8 @@ impl Core {
     }
 
     fn get_clique_from_sender(&mut self, sender: PublicKey) -> Vec<SocketAddr> {
-        let sender_address = self.committee.authorities[&sender].address;
-        let mut values: Vec<_> = self.committee.authorities.values().clone().map(|x| x.address.to_string()).collect::<Vec<_>>();
+        let sender_address = self.dns[&self.committee.authorities[&sender].address];
+        let mut values: Vec<_> = self.committee.authorities.values().clone().map(|x| self.dns[&x.address].to_string()).collect::<Vec<_>>();
         values.sort();
         debug!("Values sorted is {:?}", values);
         //let honest = self.committee.faults;
@@ -507,7 +517,7 @@ impl Core {
                     let address = self.committee
                         .address(&blocks.sender)
                         .expect("Failed to get address");
-                    let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay);
+                    let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay, self.dns.clone());
                     let handler = network.send(address, Bytes::from(message)).await;
                     let _ = handler.await;
                     return Ok(());
@@ -557,7 +567,11 @@ impl Core {
         if let Some(bytes) = self.store.read(local_tip.to_vec()).await.expect("Failed to read block"){
             local_representative = bincode::deserialize(&bytes).expect("Failed to deserialize our own block");
         }
+        if local_representative.digest().eq(&common_parent.clone()) {
+            return Ok(());
+        }
         while !child_qc.eq(local_representative.parent()) {
+            debug!("Value of local here is {:?}", local_representative);
             if let Some(bytes) = self.store.read(local_representative.parent().to_vec()).await.expect("Failed to read block"){
                 local_representative = bincode::deserialize(&bytes).expect("Failed to deserialize our own block");
             }
@@ -570,18 +584,19 @@ impl Core {
             debug!("Value of local_representative: {:?}; Value of alt_chain: {:?}", local_representative.digest().clone(), alt_chain[left-1].digest().clone());
             debug!("Remaining at the same chain");
             debug!("Value of high qc now is {:?}", self.high_qc.hash.clone());
-            //if local_representative.digest() != alt_chain[left - 1].digest(){ 
-            self.alt_tips.push(alt_chain[0].digest());
-            //}
+            if local_representative.digest() != alt_chain[left - 1].digest(){ 
+                self.alt_tips.push(alt_chain[0].digest());
+            }
             let my_clique = self.get_clique_from_sender(self.name);
             //let _last_position = my_clique.pop().expect("Failed to get last position");
-            let parties_to_kick: &[std::net::SocketAddr];
+            let mut parties_to_kick: &[std::net::SocketAddr];
             if self.committee.faults == 1 {
                 parties_to_kick = &my_clique[..(1).try_into().unwrap()];
                 //parties_to_kick = [my_clique.iter().rev().take((0).try_into().unwrap())];
             } else {
                 parties_to_kick = &my_clique[..(self.committee.faults+1).try_into().unwrap()];
             }
+            //let mut parties_kick_dns = &parties_to_kick.into_iter().map(|&x| self.dns[&x]).collect::<Vec<std::net::SocketAddr>>();
             debug!("Kicking parties {:?}", parties_to_kick);
             self.committee.update_num_of_twins((usize::try_from(self.committee.num_of_twins).unwrap() + parties_to_kick.len()).try_into().unwrap());
             debug!("Updated the number of twin to {:?}", self.committee.num_of_twins);
@@ -596,18 +611,21 @@ impl Core {
                 let mut current_firewall = self.round/self.network.allow_communications_at_round;
                 let last_index = (self.network.firewall.len() - 1) as u64;
                 let last_firewall = self.network.firewall.get(&last_index).unwrap().clone();
-                while current_firewall != 0 {
+                let mut index = current_firewall;
+                let faults = self.committee.faults;
+                while index != 0 {
                     debug!("Value of current firewall here is {:?}", current_firewall);
                     let mut firewall = self.network.firewall.get_mut(&current_firewall).unwrap();
-                    let mut index = 0;
                     firewall.retain(|(&value)| value.to_string().find(':').map(|i| value.to_string()[i+1..].parse().ok()).flatten() > Some(10000 + current_firewall.clone())); // Filter pairs where value is less than 10
-
+                                                                                                                                                        
+                    let mut firewall_from_last = self.network.firewall.get_mut(&((self.network.firewall.len()-1-(current_firewall as usize)) as u64)).unwrap();
+                    firewall_from_last.retain(|(&value)| value.to_string().find(':').map(|i| value.to_string()[i+1..].parse().ok()).flatten() > Some(10000 + faults + 1)); // Filter pairs where value is less than 10
                     //*firewall = Vec::new();
                     //*firewall = last_firewall.clone();
                     //firewall = self.network.firewall.get_mut(&((self.network.firewall.len()-1) as u64)).unwrap();
-                    current_firewall = current_firewall - 1;
+                    index = index - 1;
                 }
-                let mut firewall = self.network.firewall.get_mut(&current_firewall).unwrap();
+                let mut firewall = self.network.firewall.get_mut(&index).unwrap();
                 //*firewall = Vec::new();
                 //*firewall = last_firewall.clone();
                 firewall.retain(|(&value)| value.to_string().find(':').map(|i| value.to_string()[i+1..].parse().ok()).flatten() > Some(10000 + current_firewall.clone())); // Filter pairs where value is less than 10
@@ -628,22 +646,23 @@ impl Core {
             }
             self.high_qc = local_representative.qc.clone();
             debug!("Value of high qc after change is {:?}", self.high_qc.hash.clone());
-            let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay);
+            let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay, self.dns.clone());
             let addresses: Vec<_> = self
                 .committee
                 .broadcast_addresses(&self.name)
                 .into_iter()
-                .map(|(_, x)| x)
+                .map(|(_, x)| self.dns[&x])
                 .collect();
             let my_clique: Vec<_> = addresses.clone().into_iter().filter(|x| !self.network.firewall[&((self.network.firewall.len()-1) as u64)].contains(&x)).collect();
             //let my_clique_content: Vec<_> = my_clique.iter().filter
-            let message = ConsensusMessage::ShiftedChain(self.name,my_clique.clone());
+            let message = ConsensusMessage::ShiftedChain(self.name,my_clique.clone(), self.round);
             let message = bincode::serialize(&message)
                 .expect("Failed to serialize timeout message");
             debug!("Sending shifted chain message to nodes not in my firewall. My clique {:?}", my_clique.clone());
             for address in my_clique.clone() {
-                debug!("Sending shifted chain message to {:?}", address.clone());
-                let handler = network.send(address, Bytes::from(message.clone())).await;
+                let send_address = self.dns.iter().find_map(|(key, &val)| if val == address { Some(key) } else { None }).unwrap();
+                debug!("Sending shifted chain message to {:?}", send_address.clone());
+                let handler = network.send(*send_address, Bytes::from(message.clone())).await;
                 let _ = handler.await;
             }
             //let handles = network
@@ -708,32 +727,54 @@ impl Core {
             //self.leader_elector.firewall = Vec::new();
             //let current_firewall = self.network.firewall.get_mut(&(self.round/self.network.allow_communications_at_round)).unwrap();
             debug!("Faulty parties are {:?}", faulty_parties);
-            let faulty_parties_addresses: Vec<_> = faulty_parties.iter().map(|x| self.committee.address(x).expect("Failed to get node address")).collect();
+            let mut faulty_parties_addresses: Vec<_> = faulty_parties.iter().map(|x| self.dns[&self.committee.address(x).expect("Failed to get node address")]).collect();
             for firewall in self.network.firewall.values_mut() {
                 firewall.extend(faulty_parties_addresses.clone());
                 debug!("Firewall update here is {:?}", firewall.clone());
             }
+            if self.round/self.network.allow_communications_at_round < ((self.network.firewall.len()-2) as u64) {
+                let mut current_firewall = self.round/self.network.allow_communications_at_round;
+                let last_index = (self.network.firewall.len() - 1) as u64;
+                let last_firewall = self.network.firewall.get(&last_index).unwrap().clone();
+                let mut index = current_firewall;
+                while index != 0 {
+                    debug!("Value of current firewall here is {:?}", current_firewall);
+                    let mut firewall = self.network.firewall.get_mut(&current_firewall).unwrap();
+                    firewall.retain(|(&value)| value.to_string().find(':').map(|i| value.to_string()[i+1..].parse().ok()).flatten() > Some(10000 + current_firewall.clone())); // Filter pairs where value is less than 10
+
+                    //*firewall = Vec::new();
+                    //*firewall = last_firewall.clone();
+                    //firewall = self.network.firewall.get_mut(&((self.network.firewall.len()-1) as u64)).unwrap();
+                    index = index - 1;
+                }
+                let mut firewall = self.network.firewall.get_mut(&index).unwrap();
+                //*firewall = Vec::new();
+                //*firewall = last_firewall.clone();
+                firewall.retain(|(&value)| value.to_string().find(':').map(|i| value.to_string()[i+1..].parse().ok()).flatten() > Some(10000 + current_firewall.clone())); // Filter pairs where value is less than 10
+            } 
             debug!("Sending new firewall to proposer");
             self.tx_proposer.send(ProposerMessage::UpdateFirewall(self.network.firewall.clone())).await.expect("Failed to update firewall");
 
-            let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay);
+            let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay, self.dns.clone());
             let addresses: Vec<_> = self
                 .committee
                 .broadcast_addresses(&self.name)
                 .into_iter()
-                .map(|(_, x)| x)
+                .map(|(_, x)| self.dns[&x])
                 .collect();
             let my_clique: Vec<_> = addresses.clone().into_iter().filter(|x| !self.network.firewall[&((self.network.firewall.len()-1) as u64)].contains(&x)).collect();
             //let my_clique_content: Vec<_> = my_clique.iter().filter
-            let message = bincode::serialize(&ConsensusMessage::ShiftedChain(self.name, my_clique.clone()))
+            let message = bincode::serialize(&ConsensusMessage::ShiftedChain(self.name, my_clique.clone(), self.round))
                 .expect("Failed to serialize timeout message");
             debug!("Sending shifted chain message to nodes not in my firewall. My clique {:?}", my_clique.clone());
+            debug!("Sending shifted chain message to nodes not in my firewall. My addresses {:?}", addresses.clone());
             //let handles = network
             //    .broadcast(my_clique.clone(), Bytes::from(message.clone()), self.round, true)
             //    .await;
             for address in my_clique.clone() {
-                debug!("Sending shifted chain message to {:?}", address.clone());
-                let handler = network.send(address, Bytes::from(message.clone())).await;
+                let send_address = self.dns.iter().find_map(|(key, &val)| if val == address { Some(key) } else { None }).unwrap();
+                debug!("Sending shifted chain message to {:?}", send_address.clone());
+                let handler = network.send(*send_address, Bytes::from(message.clone())).await;
                 let _ = handler.await;
             }
             //self.round = alt_chain[0].round.clone();
@@ -758,7 +799,7 @@ impl Core {
     async fn get_faulty_parties(&mut self, sender: PublicKey) -> Vec<PublicKey> {
         let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         let values: Vec<_> = self.committee.authorities.values().cloned().collect();
-        debug!("Values is {:?} and firewall is {:?}", values.clone().into_iter().map(|x| x.address).collect::<Vec<_>>(), self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone());
+        debug!("Values is {:?} and firewall is {:?}", values.clone().into_iter().map(|x| self.dns[&x.address]).collect::<Vec<_>>(), self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone());
         
 
         let mut indices = Vec::new(); 
@@ -787,7 +828,7 @@ impl Core {
             sent_sync = SENT_SYNCS.lock().unwrap();
             let mut block = Vec::new();
             block.push(Block::default());
-            let mut my_keys: Vec<_> = parties_to_keep.clone().into_iter().map(|x| self.committee.authorities.iter().find_map(|(key, &ref val)| if val.address == *x { Some(key) } else { None })).collect();                        
+            let mut my_keys: Vec<_> = parties_to_keep.clone().into_iter().map(|x| self.committee.authorities.iter().find_map(|(key, &ref val)| if self.dns[&val.address] == *x { Some(key) } else { None })).collect();                        
             let _ = my_keys.into_iter().map(|x| sent_sync.insert(*x.unwrap(), block.clone())); 
             debug!("Values of sent sync {:?}", sent_sync);
         }
@@ -799,9 +840,10 @@ impl Core {
         //indices = values.into_iter().map(|x| if self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone().contains(&x.address){ false } else { true }).collect();
 
         for _value in values.iter() {
-            if _value.address.to_string().find(':').map(|i| _value.address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1){
+            let mut virtual_address = self.dns[&_value.address];
+            if virtual_address.to_string().find(':').map(|i| virtual_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1){
                 indices.push(false);
-            } else if self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone().contains(&_value.address){
+            } else if self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone().contains(&virtual_address){
                 indices.push(false);
             } else {
                 indices.push(true);
@@ -812,7 +854,7 @@ impl Core {
             firewall.retain(|x| !parties_to_keep.contains(&x))
         }
         //let firewall_change = self.network.firewall.get_mut(&(self.round/self.network.allow_communications_at_round)).expect("Failed to retrieve firewall").remove(last_party_position);
-        debug!("Values here is {:?} and firewall is {:?}.", values.clone().into_iter().map(|x| x.address).collect::<Vec<_>>(), self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone());
+        debug!("Values here is {:?} and firewall is {:?}.", values.clone().into_iter().map(|x| self.dns[&x.address]).collect::<Vec<_>>(), self.network.firewall[&(self.round/self.network.allow_communications_at_round)].clone());
         debug!("Indices is {:?}", indices);
         //Kick first f+1 parties of the firewall
         //self.committee.faults = 1000;
@@ -831,9 +873,11 @@ impl Core {
         debug!("Processing {:?}", block);
         //debug!("Received block {:?}", block);
 
-        let author_address = self.committee.address(&block.author).unwrap();
+        //REMOVER COMENTARIO ABAIXOOOO
+        let mut author_address = self.committee.address(&block.author).unwrap();
         let firewall_count = self.round/self.network.allow_communications_at_round;
 
+        author_address = self.dns[&author_address]; 
         if author_address.to_string().find(':').map(|i| author_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1)
             && self.network.firewall.get(&(firewall_count)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
         {
@@ -882,7 +926,7 @@ impl Core {
         // See if we can vote for this block.
         if let Some(vote) = self.make_vote(block).await {
             debug!("Created {:?}", vote);
-            let next_leader = self.leader_elector.get_leader(self.round + 1,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone());
+            let next_leader = self.leader_elector.get_leader(self.round + 1,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone(), self.dns.clone());
             if next_leader == self.name {
                 self.handle_vote(&vote).await?;
             } else {
@@ -904,7 +948,7 @@ impl Core {
             .address(&author)
             .expect("Author of valid block is not in the committee");
 
-        let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay); 
+        let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay, self.dns.clone()); 
         let mut blocks = 0;
         { 
             let my_lock = REQUEST_BLOCKS.lock().unwrap();
@@ -929,9 +973,10 @@ impl Core {
         let digest = block.digest();
         //info!("Received Block {:?}", digest);
 
-        let author_address = self.committee.address(&block.author).unwrap();
+        let mut author_address = self.committee.address(&block.author).unwrap();
         let firewall_count = self.round/self.network.allow_communications_at_round;
 
+        author_address = self.dns[&author_address]; 
         if author_address.to_string().find(':').map(|i| author_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1)
             && self.network.firewall.get(&(firewall_count)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
         {
@@ -944,19 +989,23 @@ impl Core {
         }
         
         if self.network.allow_communications_at_round < self.round {
-            let author_address = self.committee.authorities[&block.author].address;
+            //let author_address = self.committee.authorities[&block.author].address;
             let mut sync_to_sender;
             {
                 let my_requests = SENT_SYNCS.lock().unwrap();
                 sync_to_sender = my_requests.contains_key(&block.author);
             }
             debug!("Value of alt_tips here is {:?}", self.alt_tips.clone());
+            debug!("Author address is {:?}", author_address.clone());
             if self.network.firewall.get(&((self.round/self.network.allow_communications_at_round)-1)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-3) as u64)]).contains(&author_address) && !self.network.firewall.get(&(self.round/self.network.allow_communications_at_round)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-2) as u64)]).contains(&author_address) 
                 && !sync_to_sender {
+                debug!("GOt HEEEEEEEEEEEEEEEEEEEEERE");
                 if self.alt_tips.contains(&block.parent()) {
+                    debug!("NOTTTTTTTTTTTTTTTTTTTTTT");
                     let index = self.alt_tips.iter().position(|x| x.eq(block.parent())).unwrap();
                     self.alt_tips[index] = block.digest();
                 } else {
+                    debug!("OKKKKKKKKKKKKKKKKKKKKKKKKKK");
                     let _ = self.make_new_sync_request(&block, block.author.clone()).await;
                     {
                         let mut my_requests = SENT_SYNCS.lock().unwrap();
@@ -970,7 +1019,7 @@ impl Core {
         // Ensure the block proposer is the right leader for the round.
         //if block.author is in firewall but not in new_firewall, then send new sync request
         ensure!(
-            block.author == self.leader_elector.get_leader(block.round,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()),
+            block.author == self.leader_elector.get_leader(block.round,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone(), self.dns.clone()),
             ConsensusError::WrongLeader {
                 digest,
                 leader: block.author,
@@ -980,7 +1029,7 @@ impl Core {
         //info!("Processing Block {}", digest);
 
         // Check the block is correctly formed.
-        block.verify(&self.committee)?;
+        block.verify(&self.committee, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone())?;
 
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
@@ -1100,14 +1149,14 @@ impl Core {
             let message;
             if num_blocks == 10 {
                 let values: Vec<_> = self.committee.authorities.values().cloned().collect();
-                let my_authorities: Vec<_> = values.iter().filter(|x| !self.network.firewall.get(&(self.round/self.network.allow_communications_at_round)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).contains(&x.address) && x.address != self.committee.address(&self.name).unwrap()).collect();
-                let my_clique: Vec<_> = my_authorities.iter().map(|x| x.address).collect();
+                let my_authorities: Vec<_> = values.iter().filter(|x| !self.network.firewall.get(&(self.round/self.network.allow_communications_at_round)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).contains(&self.dns[&x.address]) && x.address != self.committee.address(&self.name).unwrap()).collect();
+                let my_clique: Vec<_> = my_authorities.iter().map(|x| self.dns[&x.address]).collect();
                 message = bincode::serialize(&ConsensusMessage::FirstBlocks(Blocks::new(self.name, vec_blocks.clone()), my_clique.clone())).expect("Failed to serialize vec of blocks");
             } else {
                 message = bincode::serialize(&ConsensusMessage::Blocks(Blocks::new(self.name, vec_blocks.clone()))).expect("Failed to serialize vec of blocks");
             }
             warn!("Vec blocks is {:?}", vec_blocks);
-            let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay);
+            let mut network = ReliableSender::new(self.network.firewall.clone(), self.network.allow_communications_at_round, self.network.network_delay, self.dns.clone());
             let handler = network.send(address, Bytes::from(message)).await;
             let _ = handler.await;
         }
@@ -1115,9 +1164,10 @@ impl Core {
     }
 
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
-        let author_address = self.committee.address(&(tc.votes[0].0)).unwrap();
+        let mut author_address = self.committee.address(&(tc.votes[0].0)).unwrap();
         let firewall_count = self.round/self.network.allow_communications_at_round;
 
+        author_address = self.dns[&author_address]; 
         if author_address.to_string().find(':').map(|i| author_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1)
             && self.network.firewall.get(&(firewall_count)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
         {
@@ -1129,12 +1179,12 @@ impl Core {
             return Ok(());
         }
 
-        tc.verify(&self.committee)?;
+        tc.verify(&self.committee, self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone())?;
         if tc.round < self.round {
             return Ok(());
         }
         self.advance_round(tc.round).await;
-        if self.name == self.leader_elector.get_leader(self.round,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()) {
+        if self.name == self.leader_elector.get_leader(self.round,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone(), self.dns.clone()) {
             self.generate_proposal(Some(tc)).await;
         }
         Ok(())
@@ -1145,24 +1195,29 @@ impl Core {
                 .committee
                 .broadcast_addresses(&self.name)
                 .into_iter()
-                .map(|(_, x)| x)
+                .map(|(_, x)| self.dns[&x])
                 .collect();
         let mut my_clique: Vec<_> = addresses.clone().into_iter().filter(|x| !self.network.firewall[&((self.network.firewall.len()-1) as u64)].contains(&x)).collect();
 
-        my_clique.push(self.committee.address(&self.name).unwrap());
-        let mut return_value: Vec<_> = my_clique.into_iter().filter(|&x| x != (self.committee.address(&node_to_add).unwrap())).collect();
+        my_clique.push(self.dns[&self.committee.address(&self.name).unwrap()]);
+        let mut return_value: Vec<_> = my_clique.into_iter().filter(|&x| x != self.dns[&(self.committee.address(&node_to_add).unwrap())]).collect();
 
         return_value.sort();
         debug!("current clique is {:?}", return_value.clone());
         return_value
     }
 
-    async fn handle_shifted_chain (&mut self, author: PublicKey, shifted_chain: Vec<SocketAddr>) -> ConsensusResult <()> {
-        let author_address = self.committee.address(&author).unwrap();
+    async fn handle_shifted_chain (&mut self, author: PublicKey, shifted_chain: Vec<SocketAddr>, round_number: u64) -> ConsensusResult <()> {
+        //debug!("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
+        let mut author_address = self.committee.address(&author).unwrap();
         let firewall_count = self.round/self.network.allow_communications_at_round;
 
+        author_address = self.dns[&author_address]; 
+        debug!("Round received is {:?}", round_number.clone());
+        debug!("TRUE OR FALSE HERE IS {:?} and author address is {:?}", self.network.firewall.get(&(round_number/self.network.allow_communications_at_round)).unwrap(), author_address.clone());
         if author_address.to_string().find(':').map(|i| author_address.to_string()[i+1..].parse().ok()).flatten() < Some((self.committee.faults) + 10000 + 1)
             && self.network.firewall.get(&(firewall_count)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
+                && self.network.firewall.get(&(round_number/self.network.allow_communications_at_round)).unwrap_or(&self.network.firewall[&((self.network.firewall.len()-1) as u64)]).clone().contains(&author_address)
         {
             debug!("Ignoring shifted message from {:?}", author_address.clone());
             return Ok(());
@@ -1171,7 +1226,8 @@ impl Core {
             debug!("Ignoring shifted message from {:?}", author_address.clone());
             return Ok(());
         }
-        
+        self.round = round_number;
+    
         let mut shift_chain_copy = shifted_chain.clone();
         shift_chain_copy.sort();
         if self.get_my_current_clique (author) == shift_chain_copy { 
@@ -1182,7 +1238,7 @@ impl Core {
         } 
         let mut keys = Vec::new(); 
         for (key, value) in self.committee.authorities.iter() {
-            if shifted_chain.contains(&value.address){
+            if shifted_chain.contains(&self.dns[&value.address]){
                 keys.push(key.clone())
             }
         } 
@@ -1211,7 +1267,7 @@ impl Core {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
-        if self.name == self.leader_elector.get_leader(self.round,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone()) {
+        if self.name == self.leader_elector.get_leader(self.round,self.network.firewall.get(&((self.network.firewall.len()-1) as u64)).unwrap().clone(), self.dns.clone()) {
             self.generate_proposal(None).await;
         }
 
@@ -1227,7 +1283,8 @@ impl Core {
                     ConsensusMessage::Blocks(blocks) => self.process_blocks(blocks).await,
                     ConsensusMessage::FirstBlocks(blocks, committee) => { {let mut my_lock = REQUEST_CLIQUES.lock().unwrap(); if !my_lock.contains_key(&blocks.sender){ my_lock.insert(blocks.sender, committee); debug!("My lock here is {:?}", *my_lock);}} self.process_blocks(blocks).await},
                     ConsensusMessage::NewSyncRequest(digest, num_blocks, origin) => self.handle_new_sync_requests(digest, num_blocks, origin).await,
-                    ConsensusMessage::ShiftedChain(author, shifted_chain) => self.handle_shifted_chain(author, shifted_chain).await,
+                    ConsensusMessage::ShiftedChain(author, shifted_chain, round_number) => self.handle_shifted_chain(author, shifted_chain, round_number).await,//{ shifted_chain.sort(); if self.get_my_current_clique (author) == shifted_chain { debug!("HHHHHHHHHHHHHHHHHHHHH"); return; } if author == self.name {return;} let mut keys = Vec::new(); for (key, value) in self.committee.authorities.iter() {if shifted_chain.contains(&value.address){keys.push(key.clone())}}; let mut sent_sync = Vec::new(); {let mut my_requests = SENT_SYNCS.lock().unwrap(); sent_sync = keys.iter().map(|x| my_requests.contains_key(&x)).collect(); let mut iter = sent_sync.iter(); keys.retain(|_| *iter.next().unwrap());} let my_tip_clone; {my_tip_clone = MY_TIP.lock().unwrap().clone();} let bytes = self.store.read(my_tip_clone.clone().to_vec()).await.unwrap().expect("Failed to read blocks"); let block: Block = bincode::deserialize(&bytes).expect("Failed to deserialize our own block"); debug!("Key here in shifted is {:?} and sent_sync is {:?} and author is {:?}", keys.clone(), sent_sync.clone(), shifted_chain); if keys.is_empty() {debug!("Making new sync request from shifted message to node {:?}", author.clone()); self.make_new_sync_request(&block.clone(), author.clone()).await;} Ok(())},
+                    //self.shift_committee(shifting_committee).await,
                     _ => panic!("Unexpected protocol message")
                 },
                 Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,

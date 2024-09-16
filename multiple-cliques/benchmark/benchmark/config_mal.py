@@ -93,7 +93,7 @@ class LocalCommittee(Committee):
 
 
 class NodeParameters:
-    def __init__(self, json, network, allow_communications_at_round, network_delay):
+    def __init__(self, json, network, allow_communications_at_round, network_delay, dns):
         inputs = []
         try:
             inputs += [json['consensus']['timeout_delay']]
@@ -114,7 +114,8 @@ class NodeParameters:
         self.json['network'] = {'firewall': network, 
                 #'new_firewall': network['new_firewall'],
                 'allow_communications_at_round': allow_communications_at_round,
-                'network_delay': network_delay}
+                'network_delay': network_delay,
+                'dns': dns}
 
     def print(self, filename):
         assert isinstance(filename, str)

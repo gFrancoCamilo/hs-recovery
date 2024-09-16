@@ -11,18 +11,20 @@ from benchmark.logs import LogParser, ParseError
 from benchmark.utils import Print, BenchError, PathMaker
 
 class LocalMalBench:
-    BASE_PORT = 10000
+    BASE_PORT = 11000
 
-    def __init__(self, bench_parameters_dict, node_parameters_dict, network_params_filepath):
+    def __init__(self, bench_parameters_dict, node_parameters_dict, network_params_filepath, dns_filepath):
         
         with open(network_params_filepath) as f:
             data = load(f)
+        with open(dns_filepath) as sf:
+            dns = load(sf)
         
         try:
             self.bench_parameters = BenchParameters(bench_parameters_dict)
             self.node_parameters = []
             for i in range(bench_parameters_dict['nodes']):
-                self.node_parameters.append(NodeParameters(node_parameters_dict, data['node_'+str(i)], data['allow_communications_at_round'], data['network_delay']))
+                self.node_parameters.append(NodeParameters(node_parameters_dict, data['node_'+str(i)], data['allow_communications_at_round'], data['network_delay'], dns))
         except ConfigError as e:
             raise BenchError('Invalid nodes or bench parameters', e)
         
@@ -78,8 +80,10 @@ class LocalMalBench:
             # Generate configuration files.
             keys = []
             key_files = [PathMaker.key_file(i) for i in range(nodes)]
+            i = 0
             for filename in key_files:
-                cmd = CommandMaker.generate_key(filename).split()
+                cmd = CommandMaker.generate_key(filename, i).split()
+                i+=1
                 subprocess.run(cmd, check=True)
                 keys += [Key.from_file(filename)]
 
@@ -112,15 +116,18 @@ class LocalMalBench:
             dbs = [PathMaker.db_path(i) for i in range(nodes)]
             node_logs = [PathMaker.node_log_file(i) for i in range(nodes)]
             parameters = [PathMaker.parameters_file(i) for i in range(nodes)]
+            i = 0
             for key_file, db, log_file, parameter in zip(key_files, dbs, node_logs, parameters):
                 cmd = CommandMaker.run_node(
                     key_file,
                     PathMaker.committee_file(),
                     db,
                     parameter,
+                    i,
                     #PathMaker.parameters_file(key_file),
                     debug=debug
                 )
+                i += 1
                 self._background_run(cmd, log_file)
 
             # Wait for the nodes to synchronize

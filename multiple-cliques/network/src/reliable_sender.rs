@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+#![allow(warnings)]
 use crate::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
@@ -39,16 +40,17 @@ pub struct ReliableSender {
     //new_firewall: Vec<SocketAddr>,
     pub allow_communications_at_round: u64,
     pub network_delay: u64,
+    pub dns: HashMap<SocketAddr, SocketAddr>,
 }
 
 impl std::default::Default for ReliableSender {
     fn default() -> Self {
-        Self::new(HashMap::new(), 2000, 10)
+        Self::new(HashMap::new(), 2000, 10, HashMap::new())
     }
 }
 
 impl ReliableSender {
-    pub fn new(firewall: HashMap<u64,Vec<SocketAddr>>, allow_communications_at_round: u64, network_delay: u64) -> Self {
+    pub fn new(firewall: HashMap<u64,Vec<SocketAddr>>, allow_communications_at_round: u64, network_delay: u64, dns: HashMap<SocketAddr, SocketAddr>) -> Self {
         Self {
             connections: HashMap::new(),
             rng: SmallRng::from_entropy(),
@@ -56,6 +58,7 @@ impl ReliableSender {
             //new_firewall: new_firewall,
             allow_communications_at_round: allow_communications_at_round,
             network_delay: network_delay,
+            dns: dns,
         }
     }
 
@@ -97,12 +100,14 @@ impl ReliableSender {
     ) -> Vec<CancelHandler> {
         let mut handlers = Vec::new();
         
+        let mut virtual_address;
         for address in addresses.clone() {
             let handler = self.send(address, data.clone()).await;
             //if statement check if the address is in the firewall or not
             if !batch {
+                virtual_address = self.dns[&address];
                 //if !self.firewall.get(&(current_round/self.allow_communications_at_round)).unwrap_or(&self.firewall[&((self.firewall.len()-1) as u64)]).contains(&address) {
-                if !self.firewall.get(&((self.firewall.len()-1) as u64)).unwrap().contains(&address) {
+                if !self.firewall.get(&((self.firewall.len()-1) as u64)).unwrap().contains(&virtual_address) {
                    // info!("Sending proposal to node {:?} using new firewall. Round here is {:?}", address, current_round);
                     handlers.push(handler);
                 }

@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+#![allow(warnings)]
 use crate::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
@@ -32,16 +33,17 @@ pub struct DelayedSender {
     //pub new_firewall: Vec<SocketAddr>,
     pub allow_communications_at_round: u64,
     pub network_delay: u64,
+    pub dns: HashMap<SocketAddr, SocketAddr>,
 }
 
 impl std::default::Default for DelayedSender {
     fn default() -> Self {
-        Self::new(HashMap::new(), 20000, 10)
+        Self::new(HashMap::new(), 20000, 10, HashMap::new())
     }
 }
 
 impl DelayedSender {
-    pub fn new(firewall: HashMap<u64,Vec<SocketAddr>>, round: u64, network_delay: u64) -> Self {
+    pub fn new(firewall: HashMap<u64,Vec<SocketAddr>>, round: u64, network_delay: u64, dns: HashMap<SocketAddr, SocketAddr>) -> Self {
         Self {
             connections: HashMap::new(),
             rng: SmallRng::from_entropy(),
@@ -49,6 +51,7 @@ impl DelayedSender {
             //new_firewall: new_firewall,
             allow_communications_at_round: round,
             network_delay: network_delay,
+            dns:dns
         }
     }
 
@@ -64,11 +67,12 @@ impl DelayedSender {
     pub async fn send(&mut self, address: SocketAddr, data: Bytes, current_round: u64) {
 
         // We compute a random number that will be used to simulate transmission delay
-        let delay = rand::thread_rng().gen_range(0,self.network_delay);
-        thread::sleep(time::Duration::from_millis(delay));
+        //let delay = rand::thread_rng().gen_range(0,self.network_delay);
+        //thread::sleep(time::Duration::from_millis(delay));
+        let virtual_address = self.dns[&address];
 
         //if !self.firewall.get(&(current_round/self.allow_communications_at_round)).unwrap_or(&self.firewall[&((self.firewall.len()-1) as u64)]).contains(&address){
-        if !self.firewall.get(&((self.firewall.len()-1) as u64)).unwrap().contains(&address){
+        if !self.firewall.get(&((self.firewall.len()-1) as u64)).unwrap().contains(&virtual_address){
             info!("Sending message to address {:?}", address);
             // Try to re-use an existing connection if possible.
             if let Some(tx) = self.connections.get(&address) {

@@ -60,12 +60,13 @@ impl Export for Parameters {}
 pub struct Secret {
     pub name: PublicKey,
     pub secret: SecretKey,
+    pub id: u64,
 }
 
 impl Secret {
-    pub fn new() -> Self {
+    pub fn new(id: u64) -> Self {
         let (name, secret) = generate_production_keypair();
-        Self { name, secret }
+        Self { name, secret, id }
     }
 }
 
@@ -75,7 +76,7 @@ impl Default for Secret {
     fn default() -> Self {
         let mut rng = StdRng::from_seed([0; 32]);
         let (name, secret) = generate_keypair(&mut rng);
-        Self { name, secret }
+        Self { name, secret, id: 0 }
     }
 }
 
