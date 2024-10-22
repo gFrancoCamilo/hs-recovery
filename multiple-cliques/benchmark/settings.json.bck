@@ -2,7 +2,7 @@
     "testbed": "hotstuff",
     "key": {
         "name": "tundra",
-        "path": "/home/gfrancoc/.ssh/aws"
+        "path": "/home/$USER/.ssh/aws"
     },
     "ports": {
         "consensus": 11000,
@@ -11,7 +11,7 @@
     },
     "repo": {
         "name": "hotstuff-test",
-        "url": "https://github.com/gFrancoCamilo/hotstuff-oneclique.git",
+        "url": "anonymous",
         "branch": "main"
     },
     "instances": {
